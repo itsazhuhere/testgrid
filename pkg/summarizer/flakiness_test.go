@@ -60,7 +60,7 @@ func TestIsWithinTimeFrame(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 
 			if actual := IsWithinTimeFrame(tc.column, tc.startTime, tc.endTime); actual != tc.expected {
-				t.Errorf("actual %d != expect %d", actual, tc.expected)
+				t.Errorf("actual %t != expect %t", actual, tc.expected)
 			}
 		})
 	}
