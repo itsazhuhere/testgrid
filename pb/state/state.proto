@@ -96,8 +96,8 @@ message Column {
   // display of multiple columns with the same build_id.
   string name = 2;
 
-  // Timestamp for the column, typically the earliest timestamp of any test
-  // result in the column.
+  // Timestamp in seconds for the column, typically the earliest timestamp 
+  // of any test result in the column.
   double started = 3;
 
   // Additional custom column labels, displayed below the standard column
