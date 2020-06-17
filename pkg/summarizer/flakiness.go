@@ -14,7 +14,7 @@ import (
 )
 
 var INFRA_REGEX = regexp.MustCompile(`^\w+$`)
-var JAILED_REGEX = regexp.MustCompile(`(JAILED )?(\/\/[a-z0-9\/:-_]+) - \[([a-z0-9\/:-_.]+)\]\s`)
+var JAILED_REGEX = regexp.MustCompile(`(JAILED )?(\/?\/?[A-Za-z0-9\/_\-.:}{]+) - \[([A-Za-z0-9\/:\-_.\s]+)\]\s*`)
 
 // Keep in mind that flakiness is measured as out of 100, i.e. 23 not .23
 var DEFAULT_FLAKINESS = 50.0
@@ -67,30 +67,15 @@ type FlakyBucket struct {
 	tests     int
 }
 
+// For sorting, primarily intended for map[string]int as implemented below
 type IntString struct {
-	s string
 	i int
+	s string
 }
 
-// Definitions to allow for
-type IntStringSortable []IntString
-
-func (list IntStringSortable) Len() int      { return len(list) }
-func (list IntStringSortable) Swap(i, j int) { list[i], list[j] = list[j], list[i] }
-
-func (list IntStringSortable) Less(i, j int) bool {
-	if list[i].i < list[j].i {
-		return true
-	}
-	if list[i].i > list[j].i {
-		return false
-	}
-	return sortorder.NaturalLess(list[i].s, list[j].s)
-}
-
-func CalculateHealthiness(grid *state.Grid, startTime int, endTime int) Healthiness {
+func CalculateHealthiness(grid *state.Grid, startTime int, endTime int, tab string) Healthiness {
 	results := parseGrid(grid, startTime, endTime)
-	return analyzeFlakinessFromResults(results, startTime, endTime)
+	return analyzeFlakinessFromResults(results, startTime, endTime, tab)
 }
 
 func parseGrid(grid *state.Grid, startTime int, endTime int) []Result {
@@ -136,25 +121,16 @@ func parseGrid(grid *state.Grid, startTime int, endTime int) []Result {
 	return results
 }
 
-func analyzeFlakinessFromResults(results []Result, startTime int, endTime int) Healthiness {
-	// TODO: minRuns
-	return naiveFlakiness(results, MIN_RUNS, startTime, endTime)
+func analyzeFlakinessFromResults(results []Result, startTime int, endTime int, tab string) Healthiness {
+	return naiveFlakiness(results, MIN_RUNS, startTime, endTime, tab)
 }
 
-func naiveFlakiness(results []Result, minRuns int, startDate int, endDate int) Healthiness {
+func naiveFlakiness(results []Result, minRuns int, startDate int, endDate int, tab string) Healthiness {
 	testByEnv := make(map[string]TestInfo)
 	infraIssues := make(map[string]int)
 
 	for _, test := range results {
-		name := test.name
-		env := ""
-		match := JAILED_REGEX.FindStringSubmatch(name)
-		if match != nil {
-			name = match[1]
-			env = match[2]
-		} else {
-			logrus.Infof("Test with name \"%s\" could not be split into name and env", name)
-		}
+		name, env := getNameAndEnvFromTest(test.name, tab)
 		if len(test.infraFailures) > 0 {
 			for errorType, errorCount := range test.infraFailures {
 				infraIssues[test.name+"-"+errorType] += errorCount
@@ -177,45 +153,17 @@ func naiveFlakiness(results []Result, minRuns int, startDate int, endDate int) H
 	return healthiness
 }
 
-func createHealthiness(startDate int, endDate int, results []Result, testByEnv map[string]TestInfo, infraIssues map[string]int) Healthiness {
-	healthiness := Healthiness{
-		startDate:   startDate,
-		endDate:     endDate,
-		infraIssues: make(map[string]int),
+func getNameAndEnvFromTest(testName string, tabName string) (string, string) {
+	name := testName
+	env := tabName
+	match := JAILED_REGEX.FindStringSubmatch(name)
+	if match != nil {
+		name = match[2]
+		env = match[3]
+	} else {
+		logrus.Infof("Test \"%s\" could not be split into name and env, using tab name \"%s\" as its env", testName, tabName)
 	}
-
-	// Go way of sorting the keys of a map in descending order
-	var keys []int
-	for k := range HEALTHY_RANGE {
-		keys = append(keys, k)
-	}
-	sort.Sort(sort.Reverse(sort.IntSlice(keys)))
-	for threshold := range keys {
-		newBucket := FlakyBucket{
-			threshold: float64(threshold),
-		}
-		healthiness.flakyBuckets = append(healthiness.flakyBuckets, newBucket)
-	}
-
-	averageFlakiness := 0.0
-	for _, testInfo := range testByEnv {
-		healthiness.tests = append(healthiness.tests, testInfo)
-		averageFlakiness += testInfo.flakiness
-		for _, bucket := range healthiness.flakyBuckets {
-			if testInfo.flakiness > bucket.threshold {
-				bucket.tests += 1
-			}
-		}
-	}
-	healthiness.totalTests = len(healthiness.tests)
-	healthiness.totalConfigs = len(results)
-	if healthiness.totalTests > 0 {
-		healthiness.averageFlakiness = averageFlakiness / float64(healthiness.totalTests)
-	}
-	for k, v := range infraIssues {
-		healthiness.infraIssues[k] = v
-	}
-	return healthiness
+	return name, env
 }
 
 func calculateNaiveFlakiness(test Result, minRuns int) (TestInfo, bool) {
@@ -243,19 +191,74 @@ func calculateNaiveFlakiness(test Result, minRuns int) (TestInfo, bool) {
 
 }
 
+func createHealthiness(startDate int, endDate int, results []Result, testByEnv map[string]TestInfo, infraIssues map[string]int) Healthiness {
+	healthiness := Healthiness{
+		startDate:   startDate,
+		endDate:     endDate,
+		tests:       []TestInfo{},
+		infraIssues: make(map[string]int),
+	}
+
+	// The Go way of sorting the keys of a map in descending order
+	var keys []int
+	for k := range HEALTHY_RANGE {
+		keys = append(keys, k)
+	}
+	sort.Sort(sort.Reverse(sort.IntSlice(keys)))
+	for _, threshold := range keys {
+		newBucket := FlakyBucket{
+			threshold: float64(threshold),
+		}
+		healthiness.flakyBuckets = append(healthiness.flakyBuckets, newBucket)
+	}
+
+	averageFlakiness := 0.0
+	for _, testInfo := range testByEnv {
+		healthiness.tests = append(healthiness.tests, testInfo)
+		averageFlakiness += testInfo.flakiness
+		for i, bucket := range healthiness.flakyBuckets {
+			if testInfo.flakiness > bucket.threshold {
+				healthiness.flakyBuckets[i].tests += 1.0
+				break
+			}
+		}
+	}
+	healthiness.totalTests = len(healthiness.tests)
+	healthiness.totalConfigs = len(results)
+	if healthiness.totalTests > 0 {
+		healthiness.averageFlakiness = averageFlakiness / float64(healthiness.totalTests)
+	}
+	for k, v := range infraIssues {
+		healthiness.infraIssues[k] = v
+	}
+	return healthiness
+}
+
 func calculateInfraInfo(issues map[string]int, failedCount int) string {
 	result := make([]string, 0)
 	if len(issues) > 0 && failedCount > 0 {
-		items := IntStringSortable{}
+		// Sorts the map items by value (int) and then key (string) if values are equal
+		// The sort is in descending order: [5,4,3]
+		items := make([]IntString, 0)
 		for key, value := range issues {
 			items = append(items, IntString{
 				s: key,
 				i: value,
 			})
 		}
-		sort.Sort(sort.Reverse(items))
-		for k, v := range issues {
-			result = append(result, k+fmt.Sprintf(" %.2f%% ", 100*float64(v)/float64(failedCount)))
+		sort.Slice(items, func(i, j int) bool {
+			// These two comparisons enforce descending order for the integers
+			if items[i].i > items[j].i {
+				return true
+			}
+			if items[i].i < items[j].i {
+				return false
+			}
+			// String comparison is still ascending: [a,b,c]
+			return sortorder.NaturalLess(items[i].s, items[j].s)
+		})
+		for _, item := range items {
+			result = append(result, item.s+fmt.Sprintf(" %.2f%% ", 100*float64(item.i)/float64(failedCount)))
 		}
 	}
 	return strings.TrimSpace(strings.Join(result, ""))
