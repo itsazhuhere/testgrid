@@ -59,6 +59,8 @@ func CalculateHealthiness(grid *statepb.Grid, startTime int, endTime int, tab st
 // is a config value that is 7 days by default. The Trend enum defaults to UNKNOWN, so there
 // is no need to explicitly assign UNKNOWN when a test appears in currentHealthiness but not
 // in previousHealthiness.
+// It also records the actual values of the previous interval.
+// TODO(itsazhuhere@):
 func CalculateTrend(currentHealthiness, previousHealthiness *summarypb.HealthinessInfo) {
 	previousFlakiness := map[string]float32{}
 	// Create a map for faster lookup and avoiding repeated iteration through Tests
